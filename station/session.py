@@ -90,3 +90,14 @@ class SessionRepository:
 
     def mark_closed(self, session_id: int) -> None:
         self.db.execute('UPDATE sessions SET closed = 1 WHERE session_id = ?', (session_id,))
+
+    def switch_edition(self, session: LiveSession, edition_id: int, tick: int) -> LiveSession:
+        if type(tick) is not int or tick < 0:
+            raise ClockConflict('tick must be a nonnegative integer')
+        if tick < session.tick:
+            raise ClockConflict(f'tick {tick} precedes current tick {session.tick}')
+        self.db.execute(
+            'UPDATE sessions SET edition_id = ?, tick = ? WHERE session_id = ?',
+            (edition_id, str(tick), session.session_id),
+        )
+        return replace(session, edition_id=edition_id, tick=tick)

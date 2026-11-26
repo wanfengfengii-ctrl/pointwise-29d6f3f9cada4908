@@ -3,6 +3,7 @@ from os import PathLike
 import sqlite3
 
 from audio.catalog import initialize_audio_schema
+from edition.carry import initialize_carry_schema
 from edition.catalog import initialize_edition_schema
 from layout.drafts import initialize_draft_schema
 from layout.proof import initialize_proof_schema
@@ -41,6 +42,7 @@ def initialize_database(db: sqlite3.Connection) -> None:
         initialize_draft_schema(db)
         initialize_proof_schema(db)
         initialize_edition_schema(db)
+        initialize_carry_schema(db)
         initialize_session_schema(db)
         initialize_contact_schema(db)
         initialize_wait_schema(db)

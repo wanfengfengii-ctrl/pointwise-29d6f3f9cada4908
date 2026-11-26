@@ -73,3 +73,19 @@ class PlayRepository:
             'SELECT COALESCE(MAX(ordinal), 0) FROM plays WHERE session_id = ?', (session_id,)
         ).fetchone()
         return row[0]
+
+    def has_lineage_play(
+        self, session_id: int, contacts: tuple[str, str], lineage_key: str
+    ) -> bool:
+        first, second = sorted(contacts)
+        row = self.db.execute(
+            '''SELECT 1
+               FROM plays AS p
+               JOIN rule_lineage AS l
+                 ON l.edition_id = p.edition_id AND l.rule_id = p.rule_id
+               WHERE p.session_id = ? AND p.contact_a = ? AND p.contact_b = ?
+                 AND l.lineage_key = ?
+               LIMIT 1''',
+            (session_id, first, second, lineage_key),
+        ).fetchone()
+        return row is not None

@@ -52,17 +52,24 @@ class WaitRepository:
             (session_id, contact_id, contact_id),
         )
 
+    def _row_to_wait(self, row: sqlite3.Row) -> PendingWait:
+        return PendingWait(
+            row['session_id'], row['edition_id'], row['rule_id'],
+            (row['contact_a'], row['contact_b']), row['clip_id'],
+            int(row['start_tick']), int(row['due_tick']),
+        )
+
+    def list_all(self, session_id: int) -> tuple[PendingWait, ...]:
+        rows = self.db.execute(
+            'SELECT * FROM waits WHERE session_id = ?', (session_id,)
+        ).fetchall()
+        return tuple(self._row_to_wait(row) for row in rows)
+
     def due(self, session_id: int, tick: int) -> list[PendingWait]:
-        rows = self.db.execute('SELECT * FROM waits WHERE session_id = ?', (session_id,))
         ready = []
-        for row in rows:
-            deadline = int(row['due_tick'])
-            if deadline <= tick:
-                ready.append(PendingWait(
-                    row['session_id'], row['edition_id'], row['rule_id'],
-                    (row['contact_a'], row['contact_b']), row['clip_id'],
-                    int(row['start_tick']), deadline,
-                ))
+        for wait in self.list_all(session_id):
+            if wait.due_tick <= tick:
+                ready.append(wait)
         ready.sort(key=lambda wait: (wait.due_tick, wait.rule_id, wait.contacts))
         return ready
 

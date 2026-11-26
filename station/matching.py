@@ -17,24 +17,42 @@ class PairMatch:
     start_tick: int
 
 
+def resolve_pair(
+    bundle: EditionBundle,
+    language: str,
+    contact_a: Contact,
+    contact_b: Contact,
+) -> tuple[GestureRule, tuple[str, str]] | None:
+    """Resolve one actual press pair against a map.
+
+    Returns the rule and canonically ordered contact IDs when the two fixed
+    coordinates land in distinct regions bound by a language rule.
+    """
+    region_a = bundle.region_at(contact_a.x, contact_a.y)
+    region_b = bundle.region_at(contact_b.x, contact_b.y)
+    if region_a is None or region_b is None or region_a.region_id == region_b.region_id:
+        return None
+    rules = {rule_key(language, *rule.regions): rule
+             for rule in bundle.rules_for_language(language)}
+    rule = rules.get(rule_key(language, region_a.region_id, region_b.region_id))
+    if rule is None:
+        return None
+    return rule, tuple(sorted((contact_a.contact_id, contact_b.contact_id)))
+
+
 def match_new_contact(
     bundle: EditionBundle,
     language: str,
     new_contact: Contact,
     other_contacts: tuple[Contact, ...],
 ) -> tuple[PairMatch, ...]:
-    new_region = bundle.region_at(new_contact.x, new_contact.y)
-    if new_region is None:
-        return ()
-    rules = {rule_key(language, *rule.regions): rule for rule in bundle.rules_for_language(language)}
     matches = []
     for other in other_contacts:
-        region = bundle.region_at(other.x, other.y)
-        if region is None or region.region_id == new_region.region_id:
+        resolved = resolve_pair(bundle, language, new_contact, other)
+        if resolved is None:
             continue
-        rule = rules.get(rule_key(language, new_region.region_id, region.region_id))
-        if rule is None:
-            continue
-        first, second = sorted((new_contact.contact_id, other.contact_id))
-        matches.append(PairMatch(rule, (first, second), max(new_contact.tick, other.tick)))
+        rule, contacts = resolved
+        matches.append(PairMatch(
+            rule, contacts, max(new_contact.tick, other.tick)
+        ))
     return tuple(matches)

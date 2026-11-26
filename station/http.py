@@ -10,8 +10,9 @@ from urllib.parse import unquote, urlsplit
 from audio.content import InvalidClip
 from audio.intake import register_clip
 from audio.retrieve import UnknownClip, retrieve_clip
+from edition.carry import CarryConflict, CarryRepository
 from edition.catalog import EditionCatalog, IssuedEdition, UnknownEdition
-from edition.issue import issue_layout
+from edition.issue import issue_layout, issue_successor
 from edition.verify import InvalidEditionBundle
 from layout.drafts import DraftRepository
 from layout.proof import ProofConflict, UnknownProof, create_proof, get_proof
@@ -21,6 +22,7 @@ from station.contacts import ContactConflict, press
 from station.database import initialize_database, open_database, request_transaction
 from station.install import InstallConflict, STATION_ID, install_layout
 from station.session import ClockConflict, SessionConflict, SessionRepository, UnknownSession
+from station.switching import SwitchConflict, switch_edition
 from station.ticks import advance
 
 
@@ -39,6 +41,8 @@ ERROR_RESPONSES = {
     UnknownSession: (404, 'unknown_session'),
     ProofConflict: (409, 'proof_conflict'),
     InvalidEditionBundle: (409, 'invalid_edition'),
+    CarryConflict: (409, 'carry_conflict'),
+    SwitchConflict: (409, 'switch_conflict'),
     InstallConflict: (409, 'install_conflict'),
     ContactConflict: (409, 'contact_conflict'),
     ClockConflict: (409, 'clock_conflict'),
@@ -81,8 +85,15 @@ def _fields(body: object, required=(), optional=()) -> None:
         raise _bad_request('unknown fields: ' + ', '.join(sorted(extra)))
 
 
-def _edition_response(edition: IssuedEdition) -> dict:
-    return {'edition_id': edition.edition_id, **asdict(edition.bundle)}
+def _edition_response(edition: IssuedEdition, carry=None) -> dict:
+    response = {'edition_id': edition.edition_id, **asdict(edition.bundle)}
+    if carry is not None:
+        response.update(
+            parent_edition_id=carry.parent_edition_id,
+            region_carry=carry.region_carry,
+            rule_carry=carry.rule_carry,
+        )
+    return response
 
 
 def _get(db: sqlite3.Connection, parts: list[str]) -> dict:
@@ -105,7 +116,9 @@ def _get(db: sqlite3.Connection, parts: list[str]) -> dict:
         if resource == 'proofs':
             return asdict(get_proof(db, _path_id(identifier)))
         if resource == 'editions':
-            return _edition_response(EditionCatalog(db).get(_path_id(identifier)))
+            edition = EditionCatalog(db).get(_path_id(identifier))
+            carry = CarryRepository(db).get(edition.edition_id)
+            return _edition_response(edition, carry)
         if resource == 'sessions':
             return asdict(SessionRepository(db).get(_path_id(identifier)))
     if len(parts) == 3 and parts[0] == 'sessions' and parts[2] == 'review':
@@ -121,8 +134,24 @@ def _post(db: sqlite3.Connection, parts: list[str], body: object) -> tuple[int, 
         _fields(body, ('draft_id', 'regions', 'rules'))
         return 201, asdict(create_proof(db, **body))
     if parts == ['editions']:
-        _fields(body, ('proof_id',))
-        return 201, _edition_response(issue_layout(db, _positive_id(body['proof_id'])))
+        _fields(body, ('proof_id',),
+                ('parent_edition_id', 'region_carry', 'rule_carry'))
+        proof_id = _positive_id(body['proof_id'])
+        carry_fields = ('parent_edition_id', 'region_carry', 'rule_carry')
+        present = [field for field in carry_fields if field in body]
+        if present and len(present) != len(carry_fields):
+            raise _bad_request(
+                'successor issuance requires parent_edition_id, region_carry '
+                'and rule_carry together'
+            )
+        if not present:
+            return 201, _edition_response(issue_layout(db, proof_id))
+        parent_edition_id = _positive_id(body['parent_edition_id'])
+        issued, carry = issue_successor(
+            db, proof_id, parent_edition_id,
+            body['region_carry'], body['rule_carry'],
+        )
+        return 201, _edition_response(issued, carry)
     if parts == ['station', 'install']:
         _fields(body, ('station_id', 'edition_id', 'language'))
         installed = install_layout(db, body['station_id'], _positive_id(body['edition_id']),
@@ -139,6 +168,12 @@ def _post(db: sqlite3.Connection, parts: list[str], body: object) -> tuple[int, 
         if operation == 'advance':
             _fields(body, ('tick',))
             return 200, asdict(advance(db, session_id, body['tick']))
+        if operation == 'switch-edition':
+            _fields(body, ('edition_id', 'tick'))
+            switched = switch_edition(
+                db, session_id, _positive_id(body['edition_id']), body['tick']
+            )
+            return 200, asdict(switched)
         if operation == 'close':
             _fields(body)
             return 200, asdict(close_session(db, session_id))
